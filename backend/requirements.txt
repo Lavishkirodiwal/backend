@@ -1,0 +1,21 @@
+# FastAPI for backend API
+fastapi==0.104.1
+uvicorn==0.23.2
+
+# YOLOv8
+ultralytics==8.0.152
+
+# Video/Audio Processing
+opencv-python-headless==4.8.1.78
+
+# YouTube video download
+yt-dlp
+
+# Image handling
+Pillow==10.0.0
+
+# Optional for concurrency & file handling
+python-multipart==0.0.6
+
+# Optional for data manipulation
+numpy==1.26.0
