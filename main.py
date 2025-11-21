@@ -7,8 +7,8 @@ import logging
 import asyncio
 
 # Fix imports according to new structure
-from .utils.settings import DETECTION_MODEL
-from .utils import helper as helper_api
+from utils.settings import DETECTION_MODEL
+from utils import helper as helper_api
 
 app = FastAPI(title="YOLOv8 Object Detection API")
 
