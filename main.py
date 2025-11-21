@@ -4,6 +4,7 @@ from pathlib import Path
 import shutil
 import tempfile
 import logging
+import asyncio
 
 # Fix imports according to new structure
 from utils.settings import DETECTION_MODEL
@@ -47,12 +48,21 @@ def count_objects_video(all_detections):
 async def detect_image(request: Request, file: UploadFile = File(...), conf: float = Form(0.5)):
     logger.info(f"Request received: {request.method} {request.url.path}")
     try:
+        # Limit processing time to prevent timeout on Render (30s limit)
+        timeout = 25.0
+
         temp_path = Path(tempfile.gettempdir()) / file.filename
 
         with open(temp_path, "wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
 
-        output_path, detections = helper_api.process_image(str(temp_path), model, conf=conf)
+        # Run the processing in a thread with timeout
+        output_path, detections = await asyncio.wait_for(
+            asyncio.get_event_loop().run_in_executor(
+                None, helper_api.process_image, str(temp_path), model, conf
+            ),
+            timeout=timeout
+        )
 
         counts = count_objects(detections)
 
@@ -62,6 +72,8 @@ async def detect_image(request: Request, file: UploadFile = File(...), conf: flo
             "counts": counts,
             "annotated_image": str(output_path)
         })
+    except asyncio.TimeoutError:
+        return JSONResponse({"status": "error", "message": "Request timed out. Image processing took too long."}, status_code=408)
     except Exception as e:
         return JSONResponse({"status": "error", "message": str(e)}, status_code=500)
 
@@ -70,12 +82,21 @@ async def detect_image(request: Request, file: UploadFile = File(...), conf: flo
 async def detect_video(request: Request, file: UploadFile = File(...), conf: float = Form(0.5)):
     logger.info(f"Request received: {request.method} {request.url.path}")
     try:
+        # For videos, limit processing to first 30 seconds to prevent timeout
+        timeout = 25.0
+
         temp_path = Path(tempfile.gettempdir()) / file.filename
 
         with open(temp_path, "wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
 
-        output_path, all_detections = helper_api.process_video(str(temp_path), model, conf=conf)
+        # Run the processing in a thread with timeout
+        output_path, all_detections = await asyncio.wait_for(
+            asyncio.get_event_loop().run_in_executor(
+                None, helper_api.process_video, str(temp_path), model, conf
+            ),
+            timeout=timeout
+        )
 
         counts = count_objects_video(all_detections)
 
@@ -84,6 +105,8 @@ async def detect_video(request: Request, file: UploadFile = File(...), conf: flo
             "counts": counts,
             "annotated_video": str(output_path)
         })
+    except asyncio.TimeoutError:
+        return JSONResponse({"status": "error", "message": "Request timed out. Video processing took too long."}, status_code=408)
     except Exception as e:
         return JSONResponse({"status": "error", "message": str(e)}, status_code=500)
 
@@ -109,7 +132,16 @@ async def detect_youtube(request: Request, url: str = Form(...), conf: float = F
 async def detect_rtsp(request: Request, url: str = Form(...), conf: float = Form(0.5)):
     logger.info(f"Request received: {request.method} {request.url.path}")
     try:
-        output_path, all_detections = helper_api.process_rtsp(url, model, conf=conf)
+        # RTSP streams can be slow, limit to 20 seconds
+        timeout = 20.0
+
+        # Run the processing in a thread with timeout
+        output_path, all_detections = await asyncio.wait_for(
+            asyncio.get_event_loop().run_in_executor(
+                None, helper_api.process_rtsp, url, model, conf
+            ),
+            timeout=timeout
+        )
 
         counts = count_objects_video(all_detections)
 
@@ -118,6 +150,8 @@ async def detect_rtsp(request: Request, url: str = Form(...), conf: float = Form
             "counts": counts,
             "annotated_video": str(output_path)
         })
+    except asyncio.TimeoutError:
+        return JSONResponse({"status": "error", "message": "Request timed out. RTSP processing took too long."}, status_code=408)
     except Exception as e:
         return JSONResponse({"status": "error", "message": str(e)}, status_code=500)
 
