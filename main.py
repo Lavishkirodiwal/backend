@@ -7,8 +7,8 @@ import logging
 import asyncio
 
 # Fix imports according to new structure
-from utils.settings import DETECTION_MODEL
-from utils import helper as helper_api
+from .utils.settings import DETECTION_MODEL
+from .utils import helper as helper_api
 
 app = FastAPI(title="YOLOv8 Object Detection API")
 
@@ -45,9 +45,16 @@ def count_objects_video(all_detections):
 
 
 @app.post("/detect/image")
-async def detect_image(request: Request, file: UploadFile = File(...), conf: float = Form(0.5)):
+async def detect_image(request: Request, file: UploadFile = File(...), conf: float = Form(0.3)):
     logger.info(f"Request received: {request.method} {request.url.path}")
     try:
+        # Check file size limit (5MB)
+        file.file.seek(0, 2)
+        file_size = file.file.tell()
+        file.file.seek(0)
+        if file_size > 5 * 1024 * 1024:
+            return JSONResponse({"status": "error", "message": "File too large. Maximum size is 5MB."}, status_code=413)
+
         # Limit processing time to prevent timeout on Render (30s limit)
         timeout = 25.0
 
