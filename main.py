@@ -62,7 +62,7 @@ async def detect_image(request: Request, file: UploadFile = File(...), conf: flo
             return JSONResponse({"status": "error", "message": "File too large. Maximum size is 5MB."}, status_code=413)
 
         # Limit processing time to prevent timeout on Render (30s limit)
-        timeout = 50.0
+        timeout = 100.0
 
         temp_path = Path(tempfile.gettempdir()) / file.filename
 
@@ -102,7 +102,7 @@ async def detect_video(request: Request, file: UploadFile = File(...), conf: flo
         # Define abort callback for client disconnection
         def check_abort():
             return request.is_disconnected()  # returns True if client disconnected
-
+        
         # Run video processing in executor
         output_path, all_detections = await asyncio.get_event_loop().run_in_executor(
             None,
