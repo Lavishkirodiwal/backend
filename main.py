@@ -61,7 +61,7 @@ async def detect_image(request: Request, file: UploadFile = File(...), conf: flo
             return JSONResponse({"status": "error", "message": "File too large. Maximum size is 5MB."}, status_code=413)
 
         # Limit processing time to prevent timeout on Render (30s limit)
-        timeout = 25.0
+        timeout = 50.0
 
         temp_path = Path(tempfile.gettempdir()) / file.filename
 
@@ -95,7 +95,7 @@ async def detect_video(request: Request, file: UploadFile = File(...), conf: flo
     logger.info(f"Request received: {request.method} {request.url.path}")
     try:
         # For videos, limit processing to first 30 seconds to prevent timeout
-        timeout = 25.0
+        timeout = 50.0
 
         temp_path = Path(tempfile.gettempdir()) / file.filename
 
@@ -145,7 +145,7 @@ async def detect_rtsp(request: Request, url: str = Form(...), conf: float = Form
     logger.info(f"Request received: {request.method} {request.url.path}")
     try:
         # RTSP streams can be slow, limit to 20 seconds
-        timeout = 20.0
+        timeout = 50.0
 
         # Run the processing in a thread with timeout
         output_path, all_detections = await asyncio.wait_for(
