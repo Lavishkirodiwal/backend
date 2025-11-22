@@ -11,6 +11,7 @@ import os
 # Fix imports according to new structure
 from utils.settings import DETECTION_MODEL
 from utils import helper as helper_api
+from utils.helper import process_video_abortable
 
 app = FastAPI(title="YOLOv8 Object Detection API")
 
@@ -94,24 +95,33 @@ async def detect_image(request: Request, file: UploadFile = File(...), conf: flo
 async def detect_video(request: Request, file: UploadFile = File(...), conf: float = Form(0.5)):
     logger.info(f"Request received: {request.method} {request.url.path}")
     try:
-        # For videos, limit processing to first 30 seconds to prevent timeout
-        timeout = 50.0
-
         temp_path = Path(tempfile.gettempdir()) / file.filename
-
         with open(temp_path, "wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
 
-        # Run the processing in a thread with timeout
-        output_path, all_detections = await asyncio.wait_for(
-            asyncio.get_event_loop().run_in_executor(
-                None, helper_api.process_video, str(temp_path), model, conf
-            ),
-            timeout=timeout
+        # Define abort callback for client disconnection
+        def check_abort():
+            return request.is_disconnected()  # returns True if client disconnected
+
+        # Run video processing in executor
+        output_path, all_detections = await asyncio.get_event_loop().run_in_executor(
+            None,
+            process_video_abortable,
+            str(temp_path),
+            model,
+            conf,
+            check_abort,
+            None  # max_frames=None, process full video
         )
 
-        counts = count_objects_video(all_detections)
+        # If processing was aborted
+        if output_path is None:
+            return JSONResponse(
+                {"status": "error", "message": "Client disconnected. Processing aborted."},
+                status_code=499  # 499 = Client Closed Request (common convention)
+            )
 
+        counts = count_objects_video(all_detections)
         return JSONResponse({
             "status": "success",
             "counts": counts,
@@ -121,7 +131,6 @@ async def detect_video(request: Request, file: UploadFile = File(...), conf: flo
         return JSONResponse({"status": "error", "message": "Request timed out. Video processing took too long."}, status_code=408)
     except Exception as e:
         return JSONResponse({"status": "error", "message": str(e)}, status_code=500)
-
 
 @app.post("/detect/youtube")
 async def detect_youtube(request: Request, url: str = Form(...), conf: float = Form(0.5)):
