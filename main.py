@@ -1,16 +1,21 @@
 from fastapi import FastAPI, File, UploadFile, Form, Request
 from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
 from pathlib import Path
 import shutil
 import tempfile
 import logging
 import asyncio
+import os
 
 # Fix imports according to new structure
 from utils.settings import DETECTION_MODEL
 from utils import helper as helper_api
 
 app = FastAPI(title="YOLOv8 Object Detection API")
+
+# Mount static files
+app.mount("/static", StaticFiles(directory="static"), name="static")
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -77,7 +82,7 @@ async def detect_image(request: Request, file: UploadFile = File(...), conf: flo
             "status": "success",
             "detections": detections,
             "counts": counts,
-            "annotated_image": str(output_path)
+            "annotated_image": f"/static/results/{os.path.basename(output_path)}"
         })
     except asyncio.TimeoutError:
         return JSONResponse({"status": "error", "message": "Request timed out. Image processing took too long."}, status_code=408)
@@ -110,7 +115,7 @@ async def detect_video(request: Request, file: UploadFile = File(...), conf: flo
         return JSONResponse({
             "status": "success",
             "counts": counts,
-            "annotated_video": str(output_path)
+            "annotated_video": f"/static/results/{os.path.basename(output_path)}"
         })
     except asyncio.TimeoutError:
         return JSONResponse({"status": "error", "message": "Request timed out. Video processing took too long."}, status_code=408)
@@ -155,7 +160,7 @@ async def detect_rtsp(request: Request, url: str = Form(...), conf: float = Form
         return JSONResponse({
             "status": "success",
             "counts": counts,
-            "annotated_video": str(output_path)
+            "annotated_video": f"/static/results/{os.path.basename(output_path)}"
         })
     except asyncio.TimeoutError:
         return JSONResponse({"status": "error", "message": "Request timed out. RTSP processing took too long."}, status_code=408)
