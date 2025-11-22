@@ -42,9 +42,9 @@ def process_frame(image, model, conf=0.5, tracker=None, tracking=False):
     """Detect and annotate a single frame"""
 
     if tracking and tracker:
-        res = model.track(image, conf=conf, persist=True, tracker=tracker)
+        res = model.track(image, conf=conf, persist=True, tracker=tracker, imgsz=640)
     else:
-        res = model.predict(image, conf=conf)
+        res = model.predict(image, conf=conf , imgsz=640)
 
     annotated = res[0].plot()
 
@@ -69,6 +69,15 @@ def process_image(image_path, model, conf=0.5, tracker=None, tracking=False):
     image = cv2.imread(image_path)
     if image is None:
         raise Exception(f"Cannot read image: {image_path}")
+
+    # Resize image if too large to prevent timeout (Render has 30s limit)
+    height, width = image.shape[:2]
+    max_size = 640
+    if width > max_size or height > max_size:
+        scale = min(max_size / width, max_size / height)
+        new_width = int(width * scale)
+        new_height = int(height * scale)
+        image = cv2.resize(image, (new_width, new_height), interpolation=cv2.INTER_LINEAR)
 
     annotated, counts, dets = process_frame(image, model, conf, tracker, tracking)
 
@@ -110,6 +119,58 @@ def process_video(video_path, model, conf=0.5, tracker=None, tracking=False, out
 
     return output_path, all_detections
 
+
+def process_video_abortable(video_path, model, conf, check_abort_callback, max_frames=None):
+    """
+    Processes a video frame by frame.
+    - video_path: path to input video
+    - model: your YOLO model
+    - conf: confidence threshold
+    - check_abort_callback: function returning True if processing should stop
+    - max_frames: optional, limit number of frames to process
+    """
+    cap = cv2.VideoCapture(video_path)
+    if not cap.isOpened():
+        raise RuntimeError("Cannot open video file")
+
+    frame_count = 0
+    all_detections = []
+    output_frames = []
+
+    while True:
+        ret, frame = cap.read()
+        if not ret:
+            break
+
+        frame_count += 1
+        if max_frames and frame_count > max_frames:
+            break
+
+        # Abort if requested
+        if check_abort_callback():
+            print("Processing aborted by client")
+            cap.release()
+            return None, []
+
+        # Run detection on frame
+        results = model(frame, conf=conf)  # replace with your model's inference
+        detections = [{"class": int(cls), "bbox": bbox.tolist()} for cls, bbox in zip(results.boxes.cls, results.boxes.xyxy)]
+        all_detections.append(detections)
+
+        # Optional: annotate frame
+        output_frames.append(results.plot())  # or any function that draws detections
+
+    # Save annotated video
+    output_path = video_path.replace(".mp4", "_annotated.mp4")
+    if output_frames:
+        height, width, _ = output_frames[0].shape
+        out = cv2.VideoWriter(output_path, cv2.VideoWriter_fourcc(*"mp4v"), 20, (width, height))
+        for f in output_frames:
+            out.write(f)
+        out.release()
+
+    cap.release()
+    return output_path, all_detections
 
 # ---------------------------------------------------------
 # YOUTUBE PROCESSING
