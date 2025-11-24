@@ -1,79 +1,75 @@
 from ultralytics import YOLO
 import cv2
 import os
-import tempfile
+import torch
 from collections import Counter
-from typing import Dict, List, Tuple
+from typing import List, Dict, Tuple
 
 # ----------------- PATHS -----------------
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 RESULTS_DIR = os.path.join(BASE_DIR, "..", "static", "results")
 UPLOADS_DIR = os.path.join(BASE_DIR, "..", "static", "uploads")
-
 os.makedirs(RESULTS_DIR, exist_ok=True)
 os.makedirs(UPLOADS_DIR, exist_ok=True)
 
 # ----------------- MODEL -----------------
 def load_model(model_path: str = "yolov8n.pt") -> YOLO:
-    """
-    Load YOLOv8 model. Default: nano model for CPU speed.
-    """
+    """Load YOLOv8 model (nano by default for speed)."""
     return YOLO(model_path)
-
-# ----------------- COUNT UTIL -----------------
-def count_detections(res) -> Dict[str, int]:
-    """
-    Count classes in YOLO results.
-    """
-    class_names = res[0].names
-    return Counter([class_names[int(cls)] for cls in res[0].boxes.cls.tolist()])
 
 # ----------------- PROCESS FRAME -----------------
 def process_frame(image, model, conf=0.5, tracker=None, tracking=False) -> Tuple:
     """
-    Detect and annotate a single frame.
+    Detect and annotate a single frame safely.
+    Returns annotated image, class counts, detections.
     """
-    # resize for CPU speed
+    # Resize large images for speed
     h, w = image.shape[:2]
     if max(h, w) > 640:
         scale = 640 / max(h, w)
         image = cv2.resize(image, (int(w * scale), int(h * scale)))
 
-    # detection
+    # Detection
     if tracking and tracker:
         res = model.track(image, conf=conf, persist=True, tracker=tracker, imgsz=640)
     else:
         res = model.predict(image, conf=conf, imgsz=640)
 
     annotated = res[0].plot()
-    detections = [{"bbox": box.tolist(), "class": int(cls)}
-                  for box, cls in zip(res[0].boxes.xyxy.tolist(), res[0].boxes.cls.tolist())]
-    counts = count_detections(res)
+    detections = []
+
+    if hasattr(res[0].boxes, 'xyxy') and len(res[0].boxes.xyxy) > 0:
+        boxes = res[0].boxes.xyxy
+        classes = res[0].boxes.cls
+
+        if torch.is_tensor(boxes):
+            boxes = boxes.cpu().numpy()
+        if torch.is_tensor(classes):
+            classes = classes.cpu().numpy()
+
+        detections = [{"bbox": box.tolist(), "class": int(cls)} for box, cls in zip(boxes, classes)]
+        counts = dict(Counter([res[0].names[int(cls)] for cls in classes]))
+    else:
+        counts = {}
 
     return annotated, counts, detections
 
-# ----------------- PROCESS IMAGE -----------------
+# ----------------- IMAGE -----------------
 def process_image(image_path: str, model, conf=0.5, tracker=None, tracking=False) -> Tuple[str, List[Dict]]:
-    """
-    Process a single image and save annotated result.
-    """
-    import cv2
+    """Process single image and save annotated result."""
     image = cv2.imread(image_path)
     if image is None:
         raise Exception(f"Cannot read image: {image_path}")
 
     annotated, _, detections = process_frame(image, model, conf, tracker, tracking)
-    output_path = os.path.join(RESULTS_DIR, f"annotated_image.jpg")
+    output_path = os.path.join(RESULTS_DIR, "annotated_image.jpg")
     cv2.imwrite(output_path, annotated)
-
     return output_path, detections
 
-# ----------------- PROCESS VIDEO -----------------
+# ----------------- VIDEO -----------------
 def process_video(video_path: str, model, conf=0.5, tracker=None, tracking=False,
                   output_name="annotated_video.mp4", max_frames=None) -> Tuple[str, List[List[Dict]]]:
-    """
-    Process a video safely and fast. Can limit frames for long videos.
-    """
+    """Process video safely and efficiently."""
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
         raise Exception(f"Cannot open video: {video_path}")
@@ -106,12 +102,13 @@ def process_video(video_path: str, model, conf=0.5, tracker=None, tracking=False
 
 # ----------------- YOUTUBE -----------------
 def process_youtube(url: str, model, conf=0.5) -> Tuple[str, List[List[Dict]]]:
-    """
-    Download YouTube video and process.
-    """
+    """Download YouTube video and process."""
     import yt_dlp
-    ydl_opts = {"format": "best[ext=mp4]", "quiet": True,
-                "outtmpl": os.path.join(UPLOADS_DIR, "%(id)s.%(ext)s")}
+    ydl_opts = {
+        "format": "best[ext=mp4]",
+        "quiet": True,
+        "outtmpl": os.path.join(UPLOADS_DIR, "%(id)s.%(ext)s")
+    }
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         info = ydl.extract_info(url, download=True)
         downloaded_path = ydl.prepare_filename(info)
@@ -120,9 +117,7 @@ def process_youtube(url: str, model, conf=0.5) -> Tuple[str, List[List[Dict]]]:
 
 # ----------------- RTSP -----------------
 def process_rtsp(url: str, model, conf=0.5, duration_sec=10) -> Tuple[str, List[List[Dict]]]:
-    """
-    Capture RTSP stream for limited duration.
-    """
+    """Capture RTSP stream safely for fixed duration."""
     cap = cv2.VideoCapture(url)
     if not cap.isOpened():
         raise Exception(f"Cannot open RTSP stream: {url}")
@@ -152,7 +147,5 @@ def process_rtsp(url: str, model, conf=0.5, duration_sec=10) -> Tuple[str, List[
 
 # ----------------- WEBCAM -----------------
 def process_webcam(model, conf=0.5, duration_sec=10) -> Tuple[str, List[List[Dict]]]:
-    """
-    Capture webcam feed for fixed duration.
-    """
+    """Capture webcam feed for fixed duration."""
     return process_rtsp(0, model, conf, duration_sec=duration_sec)
