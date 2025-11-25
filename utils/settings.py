@@ -2,19 +2,32 @@ from pathlib import Path
 import sys
 
 # =======================
-# Project Root Setup
+# Resolve project root
 # =======================
 FILE = Path(__file__).resolve()
 
-# ROOT points to the backend folder (parent of utils)
-ROOT = FILE.parent.parent  
+# backend/
+ROOT = FILE.parent.parent
 
-# Add ROOT to sys.path (for imports)
-if str(ROOT) not in sys.path:
-    sys.path.append(str(ROOT))
+# Add ROOT to Python path
+ROOT_STR = str(ROOT)
+if ROOT_STR not in sys.path:
+    sys.path.append(ROOT_STR)
 
 # =======================
-# Sources
+# Static Directories
+# =======================
+STATIC_DIR = ROOT / "static"
+STATIC_DIR.mkdir(exist_ok=True)
+
+UPLOADS_DIR = STATIC_DIR / "uploads"
+UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
+
+RESULTS_DIR = STATIC_DIR / "results"
+RESULTS_DIR.mkdir(parents=True, exist_ok=True)
+
+# =======================
+# Sources (UI dropdown)
 # =======================
 IMAGE = "Image"
 VIDEO = "Video"
@@ -25,28 +38,22 @@ YOUTUBE = "YouTube"
 SOURCES_LIST = [IMAGE, VIDEO, WEBCAM, RTSP, YOUTUBE]
 
 # =======================
-# Images Config
+# Images
 # =======================
-IMAGES_DIR = ROOT / "static" / "uploads"  # Use uploads as images folder
-IMAGES_DIR.mkdir(parents=True, exist_ok=True)
-
-DEFAULT_IMAGE = IMAGES_DIR / "office_4.jpg"
-DEFAULT_DETECT_IMAGE = IMAGES_DIR / "office_4_detected.jpg"
+DEFAULT_IMAGE = UPLOADS_DIR / "office_4.jpg"
+DEFAULT_DETECT_IMAGE = UPLOADS_DIR / "office_4_detected.jpg"
 
 # =======================
-# Videos Config
+# Videos
 # =======================
-VIDEO_DIR = ROOT / "static" / "uploads"
-VIDEO_DIR.mkdir(parents=True, exist_ok=True)
-
 VIDEOS_DICT = {
-    "video_1": VIDEO_DIR / "video_1.mp4",
-    "video_2": VIDEO_DIR / "video_2.mp4",
-    "video_3": VIDEO_DIR / "video_3.mp4",
+    "video_1": UPLOADS_DIR / "video_1.mp4",
+    "video_2": UPLOADS_DIR / "video_2.mp4",
+    "video_3": UPLOADS_DIR / "video_3.mp4",
 }
 
 # =======================
-# ML Model Config
+# Model Weights
 # =======================
 MODEL_DIR = ROOT / "weights"
 MODEL_DIR.mkdir(exist_ok=True)
@@ -55,6 +62,6 @@ DETECTION_MODEL = MODEL_DIR / "yolov8n.pt"
 SEGMENTATION_MODEL = MODEL_DIR / "yolov8n-seg.pt"
 
 # =======================
-# Webcam Config
+# Webcam
 # =======================
-WEBCAM_PATH = 0
+WEBCAM_PATH = 0  # Default webcam
