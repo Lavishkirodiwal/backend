@@ -23,13 +23,11 @@ def process_frame(image, model, conf=0.5, tracker=None, tracking=False) -> Tuple
     Detect and annotate a single frame safely.
     Returns annotated image, class counts, detections.
     """
-    # Resize large images for speed
     h, w = image.shape[:2]
     if max(h, w) > 640:
         scale = 640 / max(h, w)
         image = cv2.resize(image, (int(w * scale), int(h * scale)))
 
-    # Detection
     if tracking and tracker:
         res = model.track(image, conf=conf, persist=True, tracker=tracker, imgsz=640)
     else:
@@ -56,7 +54,6 @@ def process_frame(image, model, conf=0.5, tracker=None, tracking=False) -> Tuple
 
 # ----------------- IMAGE -----------------
 def process_image(image_path: str, model, conf=0.5, tracker=None, tracking=False) -> Tuple[str, List[Dict]]:
-    """Process single image and save annotated result."""
     image = cv2.imread(image_path)
     if image is None:
         raise Exception(f"Cannot read image: {image_path}")
@@ -69,7 +66,6 @@ def process_image(image_path: str, model, conf=0.5, tracker=None, tracking=False
 # ----------------- VIDEO -----------------
 def process_video(video_path: str, model, conf=0.5, tracker=None, tracking=False,
                   output_name="annotated_video.mp4", max_frames=None) -> Tuple[str, List[List[Dict]]]:
-    """Process video safely and efficiently."""
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
         raise Exception(f"Cannot open video: {video_path}")
@@ -102,7 +98,6 @@ def process_video(video_path: str, model, conf=0.5, tracker=None, tracking=False
 
 # ----------------- YOUTUBE -----------------
 def process_youtube(url: str, model, conf=0.5) -> Tuple[str, List[List[Dict]]]:
-    """Download YouTube video and process."""
     import yt_dlp
     ydl_opts = {
         "format": "best[ext=mp4]",
@@ -117,7 +112,6 @@ def process_youtube(url: str, model, conf=0.5) -> Tuple[str, List[List[Dict]]]:
 
 # ----------------- RTSP -----------------
 def process_rtsp(url: str, model, conf=0.5, duration_sec=10) -> Tuple[str, List[List[Dict]]]:
-    """Capture RTSP stream safely for fixed duration."""
     cap = cv2.VideoCapture(url)
     if not cap.isOpened():
         raise Exception(f"Cannot open RTSP stream: {url}")
