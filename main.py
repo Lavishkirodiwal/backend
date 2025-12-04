@@ -57,6 +57,8 @@ def count_objects_video(all_detections):
 # -------------------------
 @app.post("/detect/image")
 async def detect_image(file: UploadFile = File(...), conf: float = Form(0.5)):
+    # Clamp confidence between 0 and 1
+    conf = max(0.0, min(1.0, conf))
     start_time = time.time()
     logger.info(f"[IMAGE] {file.filename}, conf={conf}")
 
@@ -91,6 +93,8 @@ async def detect_video(
     conf: float = Form(0.5),
     max_frames: int = Form(None)
 ):
+    # Ensure confidence is between 0.0 and 1.0
+    conf = max(0.0, min(1.0, conf))
     start_time = time.time()
     logger.info(f"[VIDEO] {file.filename}, conf={conf}, max_frames={max_frames}")
 
@@ -122,6 +126,8 @@ async def detect_video(
 # -------------------------
 @app.post("/detect/youtube")
 async def detect_youtube(url: str = Form(...), conf: float = Form(0.5)):
+    # Ensure confidence is between 0.0 and 1.0
+    conf = max(0.0, min(1.0, conf))
     try:
         loop = asyncio.get_event_loop()
         output_path, all_detections = await loop.run_in_executor(
@@ -144,6 +150,8 @@ async def detect_youtube(url: str = Form(...), conf: float = Form(0.5)):
 # -------------------------
 @app.post("/detect/rtsp")
 async def detect_rtsp(url: str = Form(...), conf: float = Form(0.5), duration_sec: int = Form(10)):
+    # Ensure confidence is between 0.0 and 1.0
+    conf = max(0.0, min(1.0, conf))
     try:
         loop = asyncio.get_event_loop()
         output_path, all_detections = await loop.run_in_executor(
@@ -166,6 +174,8 @@ async def detect_rtsp(url: str = Form(...), conf: float = Form(0.5), duration_se
 # -------------------------
 @app.post("/detect/webcam")
 async def detect_webcam(conf: float = Form(0.5), duration: int = Form(10)):
+    # Ensure confidence is between 0.0 and 1.0
+    conf = max(0.0, min(1.0, conf))
     try:
         loop = asyncio.get_event_loop()
         output_path, all_detections = await loop.run_in_executor(
