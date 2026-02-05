@@ -1,176 +1,236 @@
 # helper.py
 import os
-import cv2
-import logging
 from pathlib import Path
-from typing import List, Dict, Optional, Tuple
-from collections import defaultdict, Counter
-from ultralytics import YOLO
+from typing import List, Dict, Tuple, Optional
+import cv2
 import torch
+from collections import defaultdict
+from ultralytics import YOLO
+import numpy as np
+import tempfile
+import pytube
+import ffmpeg
 
-logger = logging.getLogger(__name__)
-logging.basicConfig(level=logging.INFO)
-
-# ----------------------
-# DIRECTORIES
-# ----------------------
-BASE_DIR = Path(__file__).parent
-RESULTS_DIR = BASE_DIR / ".." / "static" / "results"
-UPLOADS_DIR = BASE_DIR / ".." / "static" / "uploads"
-RESULTS_DIR.mkdir(parents=True, exist_ok=True)
-UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
-
-# ----------------------
+# -------------------------
 # LOAD YOLO MODEL
-# ----------------------
-def load_model(model_path: str = "yolov8n.pt") -> YOLO:
-    """Load YOLOv8 model and move to GPU if available."""
+# -------------------------
+def load_model(model_path: str) -> YOLO:
+    """
+    Load a YOLOv8 model.
+    """
     if not os.path.exists(model_path):
-        raise FileNotFoundError(f"Model not found at {model_path}")
+        raise FileNotFoundError(f"Model not found: {model_path}")
     model = YOLO(model_path)
-    if torch.cuda.is_available():
-        model.to("cuda")
-        logger.info("Model loaded to GPU")
-    else:
-        logger.info("Model loaded to CPU")
     return model
 
-# ----------------------
+# -------------------------
 # PROCESS IMAGE
-# ----------------------
+# -------------------------
 def process_image(
-    image_path: str,
-    model: YOLO,
-    conf: float = 0.3,
-) -> Tuple[str, List[Dict]]:
-    """Run YOLO detection on an image and save annotated output."""
-    image = cv2.imread(image_path)
-    if image is None:
-        raise FileNotFoundError(f"Cannot read image at {image_path}")
-
-    results = model.predict(source=image, conf=conf, verbose=False)
+    image_path: str, 
+    model: YOLO, 
+    conf: float = 0.5
+) -> List[Dict]:
+    """
+    Detect objects in an image and return detection info.
+    """
+    results = model.predict(image_path, conf=conf, verbose=False)
     detections = []
 
     for r in results:
-        boxes = getattr(r, "boxes", None)
+        boxes = getattr(r, "boxes", [])
         if boxes is None:
             continue
-        for i in range(len(boxes)):
-            box = boxes[i]
-            det = {
-                "class": int(box.cls[0].item()),
-                "label": str(r.names[int(box.cls[0].item())]),
-                "confidence": float(box.conf[0].item()),
-                "bbox": box.xyxy[0].cpu().numpy().tolist(),
-                "id": None,  # images don’t have IDs
-            }
-            detections.append(det)
+        for box in boxes:
+            xyxy = box.xyxy.cpu().numpy()[0].tolist()  # [x1, y1, x2, y2]
+            conf_score = float(box.conf.item())
+            cls = int(box.cls.item())
+            label = r.names[cls]
+            detections.append({
+                "label": label,
+                "confidence": conf_score,
+                "bbox": xyxy,
+                "class": cls
+            })
+    return detections
 
-    # Save annotated image
-    output_path = RESULTS_DIR / f"{Path(image_path).stem}_annotated.jpg"
+# -------------------------
+# SAVE ANNOTATED IMAGE
+# -------------------------
+def save_annotated_image(
+    image_path: str, 
+    output_path: str, 
+    detections: List[Dict], 
+    class_names: Optional[Dict[int, str]] = None
+) -> None:
+    """
+    Draw boxes and labels on image and save it.
+    """
+    img = cv2.imread(image_path)
+    if img is None:
+        raise FileNotFoundError(f"Cannot read image {image_path}")
+
     for det in detections:
         x1, y1, x2, y2 = map(int, det["bbox"])
-        label = f"{det['label']} {det['confidence']:.2f}"
-        cv2.rectangle(image, (x1, y1), (x2, y2), (0, 255, 0), 2)
-        cv2.putText(image, label, (x1, max(0, y1-5)),
+        label = det["label"]
+        conf = det["confidence"]
+        text = f"{label} {conf:.2f}"
+        cv2.rectangle(img, (x1, y1), (x2, y2), (0, 255, 0), 2)
+        cv2.putText(img, text, (x1, max(0, y1 - 5)),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
-    cv2.imwrite(str(output_path), image)
-    logger.info(f"Annotated image saved to {output_path}")
+    cv2.imwrite(output_path, img)
 
-    return str(output_path), detections
-
-# ----------------------
-# PROCESS VIDEO WITH TRACKING
-# ----------------------
+# -------------------------
+# PROCESS VIDEO
+# -------------------------
 def process_video(
-    video_path: str,
-    model: YOLO,
-    conf: float = 0.3,
+    video_path: str, 
+    model: YOLO, 
+    conf: float = 0.5, 
+    output_dir: Optional[str] = None, 
+    show: bool = False,
+    output_name: str = "annotated_video.mp4",
     max_frames: Optional[int] = None
-) -> Tuple[Optional[str], List[List[Dict]]]:
-    """Process video, detect objects with YOLO, track them, and save annotated video."""
-    all_detections = []
+) -> Tuple[Path, List[List[Dict]]]:
+    """
+    Detect objects in a video and return annotated video path and detections.
+    """
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
-        logger.error(f"Cannot open video {video_path}")
-        return None, all_detections
+        raise FileNotFoundError(f"Cannot open video {video_path}")
 
-    output_path = RESULTS_DIR / f"{Path(video_path).stem}_annotated.mp4"
-    fps = cap.get(cv2.CAP_PROP_FPS) or 25
+    fps = cap.get(cv2.CAP_PROP_FPS)
     width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+
+    if output_dir is None:
+        output_dir = Path(tempfile.gettempdir())
+    else:
+        output_dir = Path(output_dir)
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+    output_path = output_dir / output_name
     fourcc = cv2.VideoWriter_fourcc(*'mp4v')
     out = cv2.VideoWriter(str(output_path), fourcc, fps, (width, height))
 
-    object_counts = defaultdict(int)
-    frame_idx = 0
+    all_detections = []
+    frame_count = 0
 
     while True:
         ret, frame = cap.read()
         if not ret:
             break
-        frame_idx += 1
-        if max_frames and frame_idx > max_frames:
+        if max_frames and frame_count >= max_frames:
             break
 
-        results = model.track(frame, conf=conf, persist=True, verbose=False)
-        frame_detections = []
+        results = model.predict(frame, conf=conf, verbose=False)
+        frame_dets = []
 
         for r in results:
-            boxes = getattr(r, "boxes", None)
+            boxes = getattr(r, "boxes", [])
             if boxes is None:
                 continue
             for box in boxes:
-                xy = box.xyxy.cpu().numpy()
-                cls = int(box.cls.item())
+                xyxy = box.xyxy.cpu().numpy()[0].tolist()
                 conf_score = float(box.conf.item())
-                obj_id = int(box.id.item()) if getattr(box, "id", None) is not None else None
-
-                if xy.shape[0] == 0:
-                    continue
-                x1, y1, x2, y2 = map(int, xy[0])
-
-                # Track object counts
-                key = f"{r.names[cls]}-{obj_id}" if obj_id is not None else f"{r.names[cls]}"
-                object_counts[key] += 1
-
-                frame_detections.append({
-                    "class": cls,
-                    "label": r.names[cls],
+                cls = int(box.cls.item())
+                label = r.names[cls]
+                frame_dets.append({
+                    "label": label,
                     "confidence": conf_score,
-                    "bbox": [x1, y1, x2, y2],
-                    "id": obj_id,
-                    "width": x2-x1,
-                    "height": y2-y1,
+                    "bbox": xyxy,
+                    "class": cls
                 })
-
-                # Draw rectangle and label
-                label_text = f"{r.names[cls]}"
-                if obj_id is not None:
-                    label_text += f"-{obj_id}"
-                label_text += f" {conf_score:.2f}"
+                # Draw on frame
+                x1, y1, x2, y2 = map(int, xyxy)
                 cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
-                cv2.putText(frame, label_text, (x1, max(0, y1-5)),
+                cv2.putText(frame, f"{label} {conf_score:.2f}", (x1, max(0, y1 - 5)),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
-                cv2.putText(frame, f"W:{x2-x1} H:{y2-y1}", (x1, y2+15),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 0), 1)
 
-        all_detections.append(frame_detections)
-
-        # Draw total counts per class
-        y_offset = 20
-        counts_per_class = defaultdict(int)
-        for k in object_counts.keys():
-            cls_name = k.split("-")[0]
-            counts_per_class[cls_name] += 1
-        for cls_name, count in counts_per_class.items():
-            cv2.putText(frame, f"{cls_name} total: {count}", (10, y_offset),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
-            y_offset += 25
-
+        all_detections.append(frame_dets)
         out.write(frame)
+        frame_count += 1
 
     cap.release()
     out.release()
-    logger.info(f"Annotated video saved to {output_path}")
-    return str(output_path), all_detections
+    return output_path, all_detections
+
+# -------------------------
+# PROCESS YOUTUBE
+# -------------------------
+def process_youtube(url: str, model: YOLO, conf: float = 0.5) -> Tuple[Path, List[List[Dict]]]:
+    """
+    Download YouTube video, detect objects, return annotated path and detections.
+    """
+    yt = pytube.YouTube(url)
+    stream = yt.streams.filter(progressive=True, file_extension='mp4').order_by('resolution').desc().first()
+    tmp_path = Path(tempfile.gettempdir()) / f"{yt.video_id}.mp4"
+    stream.download(output_path=tmp_path.parent, filename=tmp_path.name)
+    return process_video(str(tmp_path), model, conf)
+
+# -------------------------
+# PROCESS RTSP
+# -------------------------
+def process_rtsp(url: str, model: YOLO, conf: float = 0.5, duration_sec: int = 10) -> Tuple[Path, List[List[Dict]]]:
+    """
+    Capture RTSP stream for a certain duration and detect objects.
+    """
+    cap = cv2.VideoCapture(url)
+    if not cap.isOpened():
+        raise RuntimeError(f"Cannot open RTSP stream: {url}")
+
+    fps = cap.get(cv2.CAP_PROP_FPS) or 25
+    width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+
+    output_path = Path(tempfile.gettempdir()) / f"rtsp_{uuid.uuid4().hex}.mp4"
+    fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+    out = cv2.VideoWriter(str(output_path), fourcc, fps, (width, height))
+
+    all_detections = []
+    frame_count = 0
+    max_frames = int(fps * duration_sec)
+
+    while frame_count < max_frames:
+        ret, frame = cap.read()
+        if not ret:
+            break
+
+        results = model.predict(frame, conf=conf, verbose=False)
+        frame_dets = []
+        for r in results:
+            boxes = getattr(r, "boxes", [])
+            if boxes is None:
+                continue
+            for box in boxes:
+                xyxy = box.xyxy.cpu().numpy()[0].tolist()
+                conf_score = float(box.conf.item())
+                cls = int(box.cls.item())
+                label = r.names[cls]
+                frame_dets.append({
+                    "label": label,
+                    "confidence": conf_score,
+                    "bbox": xyxy,
+                    "class": cls
+                })
+                x1, y1, x2, y2 = map(int, xyxy)
+                cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
+                cv2.putText(frame, f"{label} {conf_score:.2f}", (x1, max(0, y1 - 5)),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+
+        all_detections.append(frame_dets)
+        out.write(frame)
+        frame_count += 1
+
+    cap.release()
+    out.release()
+    return output_path, all_detections
+
+# -------------------------
+# PROCESS WEBCAM
+# -------------------------
+def process_webcam(model: YOLO, conf: float = 0.5, duration_sec: int = 10) -> Tuple[Path, List[List[Dict]]]:
+    """
+    Capture webcam for a duration and detect objects.
+    """
+    return process_rtsp(0, model, conf, duration_sec)
