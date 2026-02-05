@@ -1,227 +1,176 @@
-from ultralytics import YOLO
-import cv2
+# helper.py
 import os
+import cv2
+import logging
+from pathlib import Path
+from typing import List, Dict, Optional, Tuple
+from collections import defaultdict, Counter
+from ultralytics import YOLO
 import torch
-from collections import Counter
-from typing import List, Dict, Tuple
 
-# ----------------- PATHS -----------------
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-RESULTS_DIR = os.path.join(BASE_DIR, "..", "static", "results")
-UPLOADS_DIR = os.path.join(BASE_DIR, "..", "static", "uploads")
-os.makedirs(RESULTS_DIR, exist_ok=True)
-os.makedirs(UPLOADS_DIR, exist_ok=True)
+logger = logging.getLogger(__name__)
+logging.basicConfig(level=logging.INFO)
 
-# ======================================================
-#  MODEL LOADING
-#  Re-load model inside worker process for safety
-# ======================================================
+# ----------------------
+# DIRECTORIES
+# ----------------------
+BASE_DIR = Path(__file__).parent
+RESULTS_DIR = BASE_DIR / ".." / "static" / "results"
+UPLOADS_DIR = BASE_DIR / ".." / "static" / "uploads"
+RESULTS_DIR.mkdir(parents=True, exist_ok=True)
+UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
 
+# ----------------------
+# LOAD YOLO MODEL
+# ----------------------
 def load_model(model_path: str = "yolov8n.pt") -> YOLO:
-    """Load YOLOv8 model (nano default)."""
+    """Load YOLOv8 model and move to GPU if available."""
+    if not os.path.exists(model_path):
+        raise FileNotFoundError(f"Model not found at {model_path}")
     model = YOLO(model_path)
-
-    # Force GPU if available
     if torch.cuda.is_available():
         model.to("cuda")
-
+        logger.info("Model loaded to GPU")
+    else:
+        logger.info("Model loaded to CPU")
     return model
 
-
-# ======================================================
-# PROCESS ONE FRAME
-# ======================================================
-
-def process_frame(image, model, conf=0.5, tracker=None, tracking=False) -> Tuple:
-    """Detect and annotate a single frame."""
-    h, w = image.shape[:2]
-
-    # Resize for stability
-    if max(h, w) > 1280:
-        scale = 1280 / max(h, w)
-        image = cv2.resize(image, (int(w * scale), int(h * scale)))
-
-    # Run detection / tracking
-    if tracking and tracker:
-        res = model.track(image, conf=conf, persist=True, tracker=tracker, imgsz=640)
-    else:
-        res = model.predict(image, conf=conf, imgsz=640)
-
-    # Annotated frame
-    annotated = res[0].plot()
-
-    detections = []
-    boxes = res[0].boxes.xyxy
-    classes = res[0].boxes.cls
-
-    if len(boxes) > 0:
-        if torch.is_tensor(boxes):
-            boxes = boxes.cpu().numpy()
-        if torch.is_tensor(classes):
-            classes = classes.cpu().numpy()
-
-        detections = [{"bbox": box.tolist(), "class": int(cls)} for box, cls in zip(boxes, classes)]
-        counts = dict(Counter([res[0].names[int(cls)] for cls in classes]))
-    else:
-        counts = {}
-
-    return annotated, counts, detections
-
-
-# ======================================================
-# IMAGE PROCESSING
-# ======================================================
-
-def process_image(image_path: str, model, conf=0.5, tracker=None, tracking=False):
+# ----------------------
+# PROCESS IMAGE
+# ----------------------
+def process_image(
+    image_path: str,
+    model: YOLO,
+    conf: float = 0.3,
+) -> Tuple[str, List[Dict]]:
+    """Run YOLO detection on an image and save annotated output."""
     image = cv2.imread(image_path)
     if image is None:
-        raise Exception(f"Unable to read: {image_path}")
+        raise FileNotFoundError(f"Cannot read image at {image_path}")
 
-    annotated, _, detections = process_frame(image, model, conf, tracker, tracking)
+    results = model.predict(source=image, conf=conf, verbose=False)
+    detections = []
 
-    output_path = os.path.join(RESULTS_DIR, "annotated_image.jpg")
-    cv2.imwrite(output_path, annotated)
+    for r in results:
+        boxes = getattr(r, "boxes", None)
+        if boxes is None:
+            continue
+        for i in range(len(boxes)):
+            box = boxes[i]
+            det = {
+                "class": int(box.cls[0].item()),
+                "label": str(r.names[int(box.cls[0].item())]),
+                "confidence": float(box.conf[0].item()),
+                "bbox": box.xyxy[0].cpu().numpy().tolist(),
+                "id": None,  # images don’t have IDs
+            }
+            detections.append(det)
 
-    return output_path, detections
+    # Save annotated image
+    output_path = RESULTS_DIR / f"{Path(image_path).stem}_annotated.jpg"
+    for det in detections:
+        x1, y1, x2, y2 = map(int, det["bbox"])
+        label = f"{det['label']} {det['confidence']:.2f}"
+        cv2.rectangle(image, (x1, y1), (x2, y2), (0, 255, 0), 2)
+        cv2.putText(image, label, (x1, max(0, y1-5)),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+    cv2.imwrite(str(output_path), image)
+    logger.info(f"Annotated image saved to {output_path}")
 
+    return str(output_path), detections
 
-# ======================================================
-# VIDEO PROCESSING
-# ======================================================
-
+# ----------------------
+# PROCESS VIDEO WITH TRACKING
+# ----------------------
 def process_video(
     video_path: str,
-    model,
-    conf=0.5,
-    tracker=None,
-    tracking=False,
-    output_name="annotated_video.mp4",
-    max_frames=None
-):
+    model: YOLO,
+    conf: float = 0.3,
+    max_frames: Optional[int] = None
+) -> Tuple[Optional[str], List[List[Dict]]]:
+    """Process video, detect objects with YOLO, track them, and save annotated video."""
+    all_detections = []
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
-        raise Exception(f"Cannot open video: {video_path}")
+        logger.error(f"Cannot open video {video_path}")
+        return None, all_detections
 
-    width  = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    output_path = RESULTS_DIR / f"{Path(video_path).stem}_annotated.mp4"
+    fps = cap.get(cv2.CAP_PROP_FPS) or 25
+    width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-    fps    = int(cap.get(cv2.CAP_PROP_FPS) or 20)
+    fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+    out = cv2.VideoWriter(str(output_path), fourcc, fps, (width, height))
 
-    output_path = os.path.join(RESULTS_DIR, output_name)
-    out = cv2.VideoWriter(output_path, cv2.VideoWriter_fourcc(*"mp4v"), fps, (width, height))
-
-    all_detections = []
-    frame_index = 0
+    object_counts = defaultdict(int)
+    frame_idx = 0
 
     while True:
         ret, frame = cap.read()
         if not ret:
             break
-
-        frame_index += 1
-        if max_frames and frame_index > max_frames:
+        frame_idx += 1
+        if max_frames and frame_idx > max_frames:
             break
 
-        annotated, _, detections = process_frame(frame, model, conf, tracker, tracking)
-        out.write(annotated)
-        all_detections.append(detections)
+        results = model.track(frame, conf=conf, persist=True, verbose=False)
+        frame_detections = []
+
+        for r in results:
+            boxes = getattr(r, "boxes", None)
+            if boxes is None:
+                continue
+            for box in boxes:
+                xy = box.xyxy.cpu().numpy()
+                cls = int(box.cls.item())
+                conf_score = float(box.conf.item())
+                obj_id = int(box.id.item()) if getattr(box, "id", None) is not None else None
+
+                if xy.shape[0] == 0:
+                    continue
+                x1, y1, x2, y2 = map(int, xy[0])
+
+                # Track object counts
+                key = f"{r.names[cls]}-{obj_id}" if obj_id is not None else f"{r.names[cls]}"
+                object_counts[key] += 1
+
+                frame_detections.append({
+                    "class": cls,
+                    "label": r.names[cls],
+                    "confidence": conf_score,
+                    "bbox": [x1, y1, x2, y2],
+                    "id": obj_id,
+                    "width": x2-x1,
+                    "height": y2-y1,
+                })
+
+                # Draw rectangle and label
+                label_text = f"{r.names[cls]}"
+                if obj_id is not None:
+                    label_text += f"-{obj_id}"
+                label_text += f" {conf_score:.2f}"
+                cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
+                cv2.putText(frame, label_text, (x1, max(0, y1-5)),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+                cv2.putText(frame, f"W:{x2-x1} H:{y2-y1}", (x1, y2+15),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 0), 1)
+
+        all_detections.append(frame_detections)
+
+        # Draw total counts per class
+        y_offset = 20
+        counts_per_class = defaultdict(int)
+        for k in object_counts.keys():
+            cls_name = k.split("-")[0]
+            counts_per_class[cls_name] += 1
+        for cls_name, count in counts_per_class.items():
+            cv2.putText(frame, f"{cls_name} total: {count}", (10, y_offset),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+            y_offset += 25
+
+        out.write(frame)
 
     cap.release()
     out.release()
-    return output_path, all_detections
-
-
-# ======================================================
-# YOUTUBE
-# ======================================================
-
-def process_youtube(url: str, model, conf=0.5):
-    import yt_dlp
-
-    ydl_opts = {
-        "format": "best[ext=mp4]",
-        "quiet": True,
-        "outtmpl": os.path.join(UPLOADS_DIR, "%(id)s.%(ext)s")
-    }
-
-    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        info = ydl.extract_info(url, download=True)
-        video_path = ydl.prepare_filename(info)
-
-    return process_video(video_path, model, conf, output_name="youtube_annotated.mp4")
-
-
-# ======================================================
-# RTSP
-# ======================================================
-
-def process_rtsp(url: str, model, conf=0.5, duration_sec=10):
-    cap = cv2.VideoCapture(url)
-    if not cap.isOpened():
-        raise Exception(f"Cannot open RTSP: {url}")
-
-    width  = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-    height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-    fps    = int(cap.get(cv2.CAP_PROP_FPS) or 20)
-    total_frames = duration_sec * fps
-
-    output_path = os.path.join(RESULTS_DIR, "rtsp_annotated.mp4")
-    out = cv2.VideoWriter(output_path, cv2.VideoWriter_fourcc(*"mp4v"), fps, (width, height))
-
-    all_detections = []
-    count = 0
-
-    while count < total_frames:
-        ret, frame = cap.read()
-        if not ret:
-            break
-
-        count += 1
-
-        annotated, _, detections = process_frame(frame, model, conf)
-        out.write(annotated)
-        all_detections.append(detections)
-
-    cap.release()
-    out.release()
-    return output_path, all_detections
-
-
-# ======================================================
-# WEBCAM (FIXED)
-# ======================================================
-
-def process_webcam(model, conf=0.5, duration_sec=10):
-    """
-    Proper webcam processing.
-    DO NOT use RTSP(0).
-    """
-    cap = cv2.VideoCapture(0)
-    if not cap.isOpened():
-        raise Exception("Cannot access webcam")
-
-    fps = int(cap.get(cv2.CAP_PROP_FPS) or 20)
-    frame_width  = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-    frame_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-
-    output_path = os.path.join(RESULTS_DIR, "webcam_annotated.mp4")
-    out = cv2.VideoWriter(output_path, cv2.VideoWriter_fourcc(*"mp4v"), fps, (frame_width, frame_height))
-
-    total_frames = duration_sec * fps
-
-    all_detections = []
-    count = 0
-
-    while count < total_frames:
-        ret, frame = cap.read()
-        if not ret:
-            break
-
-        count += 1
-
-        annotated, _, detections = process_frame(frame, model, conf)
-        out.write(annotated)
-        all_detections.append(detections)
-
-    cap.release()
-    out.release()
-    return output_path, all_detections
+    logger.info(f"Annotated video saved to {output_path}")
+    return str(output_path), all_detections
