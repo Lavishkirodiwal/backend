@@ -2,16 +2,14 @@
 import os
 import uuid
 import shutil
-import tempfile
 import logging
 import asyncio
 from pathlib import Path
-from collections import defaultdict
-from concurrent.futures import ProcessPoolExecutor
 from typing import List, Dict, Optional
+from concurrent.futures import ProcessPoolExecutor
 
-from fastapi import FastAPI, File, UploadFile, Form, HTTPException, Request
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi import FastAPI, File, UploadFile, Form, HTTPException
+from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from utils.helper import (
@@ -213,3 +211,12 @@ async def detect_webcam(conf: float = Form(CONF_DEFAULT), duration_sec: int = Fo
 @app.get("/ping")
 async def ping():
     return {"status": "OK"}
+
+# -------------------------
+# RUN APP (Render port)
+# -------------------------
+if __name__ == "__main__":
+    import uvicorn
+
+    port = int(os.environ.get("PORT", 8000))  # Render requires binding to $PORT
+    uvicorn.run(app, host="0.0.0.0", port=port)
