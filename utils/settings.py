@@ -5,17 +5,15 @@ import sys
 # Resolve project root
 # =======================
 FILE = Path(__file__).resolve()
+ROOT = FILE.parent.parent  # Assume this file is in backend/ -> go up to project root
 
-# backend/
-ROOT = FILE.parent.parent
-
-# Add ROOT to Python path
+# Add ROOT to Python path so imports work
 ROOT_STR = str(ROOT)
 if ROOT_STR not in sys.path:
     sys.path.append(ROOT_STR)
 
 # =======================
-# Static Directories
+# Static directories
 # =======================
 STATIC_DIR = ROOT / "static"
 STATIC_DIR.mkdir(exist_ok=True)
@@ -27,7 +25,7 @@ RESULTS_DIR = STATIC_DIR / "results"
 RESULTS_DIR.mkdir(parents=True, exist_ok=True)
 
 # =======================
-# Sources (UI dropdown)
+# Sources (UI dropdown options)
 # =======================
 IMAGE = "Image"
 VIDEO = "Video"
@@ -38,7 +36,7 @@ YOUTUBE = "YouTube"
 SOURCES_LIST = [IMAGE, VIDEO, WEBCAM, RTSP, YOUTUBE]
 
 # =======================
-# Images
+# Default images
 # =======================
 DEFAULT_IMAGE = UPLOADS_DIR / "office_4.jpg"
 DEFAULT_DETECT_IMAGE = UPLOADS_DIR / "office_4_detected.jpg"
@@ -53,15 +51,15 @@ VIDEOS_DICT = {
 }
 
 # =======================
-# Model Weights
+# Model weights
 # =======================
 MODEL_DIR = ROOT / "weights"
 MODEL_DIR.mkdir(exist_ok=True)
 
-DETECTION_MODEL = MODEL_DIR / "yolov8n.pt"
-SEGMENTATION_MODEL = MODEL_DIR / "yolov8n-seg.pt"
+DETECTION_MODEL = MODEL_DIR / "yolov8n.pt"        # YOLOv8 detection model
+SEGMENTATION_MODEL = MODEL_DIR / "yolov8n-seg.pt" # YOLOv8 segmentation model
 
 # =======================
 # Webcam
 # =======================
-WEBCAM_PATH = 0  # Default webcam
+WEBCAM_PATH = 0  # Default webcam index
