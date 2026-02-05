@@ -13,6 +13,7 @@ opencv-python>=4.8.1
 
 # YouTube downloader
 yt-dlp>=2023.0
+pytube>=15.0.0
 
 # Image handling
 Pillow>=10.1.0
