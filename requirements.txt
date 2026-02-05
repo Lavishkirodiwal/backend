@@ -11,6 +11,8 @@ torch>=2.1.0
 # OpenCV (full version for video, webcam, RTSP)
 opencv-python>=4.8.1
 
+ffmpeg-python>=0.2.0
+
 # YouTube downloader
 yt-dlp>=2023.0
 pytube>=15.0.0
